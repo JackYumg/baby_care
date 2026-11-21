@@ -1,0 +1,158 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
+
+import 'core/theme/app_theme.dart';
+import 'features/babies/babies_page.dart';
+import 'features/babies/baby_form_page.dart';
+import 'features/statistics/statistics_page.dart';
+import 'features/today/today_page.dart';
+import 'state/app_state.dart';
+
+class YuyingApp extends StatelessWidget {
+  const YuyingApp({super.key, required this.state});
+
+  final AppState state;
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: '育婴',
+      debugShowCheckedModeBanner: false,
+      theme: buildAppTheme(Brightness.light),
+      darkTheme: buildAppTheme(Brightness.dark),
+      themeMode: ThemeMode.system,
+      locale: const Locale('zh', 'CN'),
+      supportedLocales: const [Locale('zh', 'CN')],
+      localizationsDelegates: const [
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
+      home: AppRoot(state: state),
+    );
+  }
+}
+
+class AppRoot extends StatelessWidget {
+  const AppRoot({super.key, required this.state});
+
+  final AppState state;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: state,
+      builder: (context, _) {
+        if (state.babies.isEmpty) return OnboardingPage(state: state);
+        return HomeShell(state: state);
+      },
+    );
+  }
+}
+
+class HomeShell extends StatefulWidget {
+  const HomeShell({super.key, required this.state});
+
+  final AppState state;
+
+  @override
+  State<HomeShell> createState() => _HomeShellState();
+}
+
+class _HomeShellState extends State<HomeShell> {
+  int _index = 0;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: IndexedStack(
+        index: _index,
+        children: [
+          TodayPage(state: widget.state),
+          StatisticsPage(state: widget.state),
+          BabiesPage(state: widget.state),
+        ],
+      ),
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: _index,
+        onDestinationSelected: (value) => setState(() => _index = value),
+        destinations: const [
+          NavigationDestination(
+            icon: Icon(Icons.today_rounded),
+            selectedIcon: Icon(Icons.today),
+            label: '今日',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.insights_rounded),
+            selectedIcon: Icon(Icons.insights),
+            label: '统计',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.child_care_rounded),
+            selectedIcon: Icon(Icons.child_care),
+            label: '宝宝',
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class OnboardingPage extends StatelessWidget {
+  const OnboardingPage({super.key, required this.state});
+
+  final AppState state;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Scaffold(
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(28),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                width: 96,
+                height: 96,
+                decoration: const BoxDecoration(
+                  color: AppColors.greenSoft,
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.child_care_rounded,
+                  size: 44,
+                  color: AppColors.green,
+                ),
+              ),
+              const SizedBox(height: 24),
+              Text(
+                '欢迎使用育婴',
+                style: theme.textTheme.headlineSmall?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                '记录喝奶、排便和睡眠，数据只保存在本机。\n先创建一个宝宝档案开始吧。',
+                textAlign: TextAlign.center,
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: AppColors.subtle,
+                  height: 1.6,
+                ),
+              ),
+              const SizedBox(height: 32),
+              FilledButton(
+                onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => BabyFormPage(state: state)),
+                ),
+                child: const Text('创建宝宝档案'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
