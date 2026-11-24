@@ -99,6 +99,15 @@ class _SplashGateState extends State<SplashGate> {
       duration: const Duration(milliseconds: 420),
       switchInCurve: Curves.easeOut,
       switchOutCurve: Curves.easeIn,
+      layoutBuilder: (currentChild, previousChildren) {
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            ...previousChildren.map((c) => Positioned.fill(child: c)),
+            if (currentChild != null) Positioned.fill(child: currentChild),
+          ],
+        );
+      },
       child: state == null
           ? SplashView(
               key: const ValueKey('splash'),

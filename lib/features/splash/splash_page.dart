@@ -62,6 +62,7 @@ class _SplashViewState extends State<SplashView>
       child: Scaffold(
         backgroundColor: background,
         body: Stack(
+          fit: StackFit.expand,
           children: [
             // 顶部柔和光晕，避免大面积纯色显得空。
             Positioned(
