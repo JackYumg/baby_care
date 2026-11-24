@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
@@ -7,7 +9,9 @@ import 'features/babies/babies_page.dart';
 import 'features/babies/baby_form_page.dart';
 import 'features/splash/splash_page.dart';
 import 'features/statistics/statistics_page.dart';
+import 'features/tasks/tasks_page.dart';
 import 'features/today/today_page.dart';
+import 'platform/care_reminders.dart';
 import 'platform/feed_notifications.dart';
 import 'state/app_state.dart';
 
@@ -64,6 +68,8 @@ class _SplashGateState extends State<SplashGate> {
       final db = await AppDatabase.open();
       final state = AppState(db);
       await state.init();
+      // 启动时补排未来待办提醒，不阻塞进入主界面。
+      unawaited(syncCareReminders(state));
       final elapsed = DateTime.now().difference(startedAt);
       if (elapsed < _minimumSplash) {
         await Future<void>.delayed(_minimumSplash - elapsed);
@@ -130,6 +136,16 @@ class HomeShell extends StatefulWidget {
 class _HomeShellState extends State<HomeShell> {
   int _index = 0;
 
+  /// 待办页在首次切换过去时才创建，避免启动即触发生成默认计划。
+  bool _tasksOpened = false;
+
+  void _selectTab(int value) {
+    setState(() {
+      _index = value;
+      if (value == 1) _tasksOpened = true;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -137,18 +153,26 @@ class _HomeShellState extends State<HomeShell> {
         index: _index,
         children: [
           TodayPage(state: widget.state),
+          _tasksOpened
+              ? TasksPage(state: widget.state)
+              : const SizedBox.shrink(),
           StatisticsPage(state: widget.state),
           BabiesPage(state: widget.state),
         ],
       ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _index,
-        onDestinationSelected: (value) => setState(() => _index = value),
+        onDestinationSelected: _selectTab,
         destinations: const [
           NavigationDestination(
             icon: Icon(Icons.today_rounded),
             selectedIcon: Icon(Icons.today),
             label: '今日',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.event_note_rounded),
+            selectedIcon: Icon(Icons.event_note),
+            label: '待办',
           ),
           NavigationDestination(
             icon: Icon(Icons.insights_rounded),
