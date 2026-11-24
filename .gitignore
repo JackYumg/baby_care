@@ -52,4 +52,7 @@ key.properties
 
 # Local debug screenshots
 .screenshots/
+
+# AI IDE auto-generated specs/plans
+.trae/
 .gitignore
