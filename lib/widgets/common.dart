@@ -191,15 +191,15 @@ class QuickActionButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      borderRadius: BorderRadius.circular(20),
-      onTap: onTap,
-      child: Ink(
-        decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.14),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: color.withValues(alpha: 0.28)),
-        ),
+    return Material(
+      color: color.withValues(alpha: 0.14),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(20),
+        side: BorderSide(color: color.withValues(alpha: 0.28)),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
         child: Padding(
           padding: const EdgeInsets.symmetric(vertical: 18),
           child: Column(
@@ -241,18 +241,203 @@ Future<int?> pickStatDateTime(
     confirmText: '确定',
   );
   if (pickedDate == null || !context.mounted) return null;
-  final pickedTime = await showTimePicker(
-    context: context,
+  final pickedTime = await _showTimeGridPicker(
+    context,
     initialTime: TimeOfDay(hour: hour, minute: minute),
-    helpText: '选择时间',
-    cancelText: '取消',
-    confirmText: '确定',
   );
   if (pickedTime == null) return null;
   return combineStatDateTime(
     DateTime.utc(pickedDate.year, pickedDate.month, pickedDate.day),
     pickedTime.hour,
     pickedTime.minute,
+  );
+}
+
+/// 底部弹窗大按钮时间选择器，适合老年人操作。
+Future<TimeOfDay?> _showTimeGridPicker(
+  BuildContext context, {
+  required TimeOfDay initialTime,
+}) async {
+  int hour = initialTime.hour;
+  // 分钟对齐到最近的 5 步长
+  int minute = (initialTime.minute / 5).round() * 5;
+  if (minute >= 60) minute = 55;
+
+  final theme = Theme.of(context);
+
+  return showModalBottomSheet<TimeOfDay>(
+    context: context,
+    isScrollControlled: true,
+    showDragHandle: true,
+    backgroundColor: theme.colorScheme.surface,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+    ),
+    builder: (sheetContext) {
+      final bottomInset = MediaQuery.of(sheetContext).viewInsets.bottom;
+      return StatefulBuilder(
+        builder: (sheetContext, setSheetState) {
+          return Padding(
+            padding: EdgeInsets.fromLTRB(20, 8, 20, bottomInset + 24),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // 标题
+                  Text(
+                    '选择时间',
+                    textAlign: TextAlign.center,
+                    style: theme.textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  // 当前选中时间大显示
+                  Container(
+                    padding: const EdgeInsets.symmetric(vertical: 18),
+                    decoration: BoxDecoration(
+                      color: AppColors.greenSoft,
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: Text(
+                      '${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        fontSize: 52,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.greenDark,
+                        letterSpacing: 2,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                  // 小时选择 4 列 x 6 行
+                  Text(
+                    '小时',
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  _buildTimeGrid(
+                    sheetContext,
+                    itemCount: 24,
+                    crossAxisCount: 4,
+                    selectedIndex: hour,
+                    labelBuilder: (i) => i.toString().padLeft(2, '0'),
+                    onTap: (i) => setSheetState(() => hour = i),
+                  ),
+                  const SizedBox(height: 20),
+                  // 分钟选择 0,5,10...55 共 12 个
+                  Text(
+                    '分钟（步长 5）',
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  _buildTimeGrid(
+                    sheetContext,
+                    itemCount: 12,
+                    crossAxisCount: 4,
+                    selectedIndex: minute ~/ 5,
+                    labelBuilder: (i) => (i * 5).toString().padLeft(2, '0'),
+                    onTap: (i) => setSheetState(() => minute = i * 5),
+                  ),
+                  const SizedBox(height: 28),
+                  // 底部按钮
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () => Navigator.of(sheetContext).pop(),
+                          style: OutlinedButton.styleFrom(
+                            minimumSize: const Size.fromHeight(52),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                          ),
+                          child: const Text('取消'),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: FilledButton(
+                          onPressed: () => Navigator.of(
+                            sheetContext,
+                          ).pop(TimeOfDay(hour: hour, minute: minute)),
+                          style: FilledButton.styleFrom(
+                            minimumSize: const Size.fromHeight(52),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                          ),
+                          child: const Text('确定'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      );
+    },
+  );
+}
+
+Widget _buildTimeGrid(
+  BuildContext context, {
+  required int itemCount,
+  required int crossAxisCount,
+  required int selectedIndex,
+  required String Function(int i) labelBuilder,
+  required ValueChanged<int> onTap,
+}) {
+  final theme = Theme.of(context);
+  final colorScheme = theme.colorScheme;
+
+  return GridView.builder(
+    shrinkWrap: true,
+    physics: const NeverScrollableScrollPhysics(),
+    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+      crossAxisCount: crossAxisCount,
+      mainAxisSpacing: 8,
+      crossAxisSpacing: 8,
+      childAspectRatio: 1.6,
+    ),
+    itemCount: itemCount,
+    itemBuilder: (_, i) {
+      final selected = i == selectedIndex;
+      return GestureDetector(
+        onTap: () => onTap(i),
+        child: Container(
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: selected ? colorScheme.primary : Colors.transparent,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: selected
+                  ? colorScheme.primary
+                  : AppColors.border,
+              width: 1.5,
+            ),
+          ),
+          child: Text(
+            labelBuilder(i),
+            style: TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.w700,
+              color: selected
+                  ? colorScheme.onPrimary
+                  : theme.textTheme.bodyLarge?.color,
+            ),
+          ),
+        ),
+      );
+    },
   );
 }
 

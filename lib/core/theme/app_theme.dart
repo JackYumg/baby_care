@@ -97,7 +97,6 @@ ThemeData buildAppTheme(Brightness brightness) {
       backgroundColor: isDark ? AppColors.darkSurface : Colors.white,
       indicatorColor: scheme.secondaryContainer,
       elevation: 0,
-      height: 68,
       labelTextStyle: WidgetStateProperty.resolveWith(
         (states) => TextStyle(
           fontSize: 12,

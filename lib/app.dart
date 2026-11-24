@@ -11,6 +11,7 @@ import 'features/splash/splash_page.dart';
 import 'features/statistics/statistics_page.dart';
 import 'features/tasks/tasks_page.dart';
 import 'features/today/today_page.dart';
+import 'platform/alarm_scheduler.dart';
 import 'platform/care_reminders.dart';
 import 'platform/feed_notifications.dart';
 import 'state/app_state.dart';
@@ -64,6 +65,8 @@ class _SplashGateState extends State<SplashGate> {
     _booting = true;
     final startedAt = DateTime.now();
     try {
+      // 清理可能残留的响铃服务，避免重启后一直响。
+      unawaited(AlarmScheduler.stopRinging());
       await FeedNotifications.init();
       final db = await AppDatabase.open();
       final state = AppState(db);
@@ -96,6 +99,15 @@ class _SplashGateState extends State<SplashGate> {
       duration: const Duration(milliseconds: 420),
       switchInCurve: Curves.easeOut,
       switchOutCurve: Curves.easeIn,
+      layoutBuilder: (currentChild, previousChildren) {
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            ...previousChildren.map((c) => Positioned.fill(child: c)),
+            if (currentChild != null) Positioned.fill(child: currentChild),
+          ],
+        );
+      },
       child: state == null
           ? SplashView(
               key: const ValueKey('splash'),
