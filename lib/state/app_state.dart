@@ -6,12 +6,14 @@ import 'package:uuid/uuid.dart';
 
 import '../data/backup_service.dart';
 import '../data/repositories.dart';
+import '../domain/care_schedule.dart';
 import '../domain/daily_statistics.dart';
 import '../domain/feeding_reminder.dart';
 import '../domain/models.dart';
 import '../domain/time_rules.dart';
 import '../platform/feed_notifications.dart';
 import '../platform/feed_status_service.dart';
+import '../platform/image_store.dart';
 
 enum TimelineKind { feeding, sleep, stool }
 
@@ -37,12 +39,18 @@ class AppState extends ChangeNotifier {
   AppState(this.db)
     : babyRepo = BabyRepository(db),
       recordRepo = RecordRepository(db),
+      growthRepo = GrowthRepository(db),
+      checkupRepo = CheckupRepository(db),
+      vaccineRepo = VaccineRepository(db),
       settingsRepo = SettingsRepository(db),
       backupService = BackupService(db);
 
   final Database db;
   final BabyRepository babyRepo;
   final RecordRepository recordRepo;
+  final GrowthRepository growthRepo;
+  final CheckupRepository checkupRepo;
+  final VaccineRepository vaccineRepo;
   final SettingsRepository settingsRepo;
   final BackupService backupService;
 
@@ -55,6 +63,9 @@ class AppState extends ChangeNotifier {
   DateTime selectedDate = todayStatDate();
   DailySummary summary = DailySummary.empty;
   List<TimelineEntry> timeline = const [];
+  List<GrowthRecord> growthRecords = const [];
+  List<CheckupPlan> checkups = const [];
+  List<VaccineRecord> vaccines = const [];
   SleepRecord? ongoingSleep;
   ActiveFeeding? activeFeeding;
   List<FeedingSegment> activeSegments = const [];
@@ -172,6 +183,9 @@ class AppState extends ChangeNotifier {
     if (baby == null) {
       summary = DailySummary.empty;
       timeline = const [];
+      growthRecords = const [];
+      checkups = const [];
+      vaccines = const [];
       ongoingSleep = null;
       activeFeeding = null;
       _stopTicker();
@@ -186,6 +200,9 @@ class AppState extends ChangeNotifier {
     );
     _sleeps = await recordRepo.sleepsOverlapping(baby.id, start, end);
     _stools = await recordRepo.stoolsBetween(baby.id, start, end);
+    growthRecords = await growthRepo.listByBaby(baby.id);
+    checkups = await checkupRepo.listByBaby(baby.id);
+    vaccines = await vaccineRepo.listByBaby(baby.id);
     ongoingSleep = await recordRepo.ongoingSleep(baby.id);
     activeFeeding = await recordRepo.activeFeeding(baby.id);
     if (activeFeeding != null) {
@@ -306,7 +323,14 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> deleteBaby(String babyId) async {
+    final imagePaths = <String>[
+      ...await recordRepo.stoolImagePaths(babyId: babyId),
+      ...await checkupRepo.imagePaths(babyId: babyId),
+    ];
     await babyRepo.delete(babyId);
+    for (final path in imagePaths) {
+      await _deleteImage(path);
+    }
     babies = await babyRepo.list();
     if (currentBaby?.id == babyId) {
       currentBaby = babies.isEmpty ? null : babies.first;
@@ -315,6 +339,7 @@ class AppState extends ChangeNotifier {
       }
     }
     await refresh();
+    await _pruneImages();
   }
 
   // ---------- 喝奶 ----------
@@ -466,6 +491,7 @@ class AppState extends ChangeNotifier {
     StoolColor? color,
     String? consistency,
     String? note,
+    String? imagePath,
   }) async {
     final baby = currentBaby;
     if (baby == null) return;
@@ -475,6 +501,7 @@ class AppState extends ChangeNotifier {
       color: color,
       consistency: consistency,
       note: note,
+      imagePath: imagePath,
     );
     await refresh();
   }
@@ -485,19 +512,29 @@ class AppState extends ChangeNotifier {
     StoolColor? color,
     String? consistency,
     String? note,
+    String? imagePath,
   }) async {
+    final oldImagePath = (await recordRepo.stoolById(id))?.imagePath;
     await recordRepo.updateStool(
       id: id,
       occurredAt: occurredAt,
       color: color,
       consistency: consistency,
       note: note,
+      imagePath: imagePath,
     );
+    if (oldImagePath != null && oldImagePath != imagePath) {
+      await _deleteImage(oldImagePath);
+    }
     await refresh();
   }
 
   Future<void> deleteStool(String id) async {
+    final imagePath = (await recordRepo.stoolById(id))?.imagePath;
     await recordRepo.deleteStool(id);
+    if (imagePath != null) {
+      await _deleteImage(imagePath);
+    }
     await refresh();
   }
 
@@ -552,6 +589,338 @@ class AppState extends ChangeNotifier {
   Future<void> deleteSleep(String id) async {
     await recordRepo.deleteSleep(id);
     await refresh();
+  }
+
+  // ---------- 生长记录 ----------
+
+  Future<void> addGrowth({
+    required int measuredAt,
+    double? heightCm,
+    double? weightKg,
+    double? headCm,
+    String? note,
+  }) async {
+    final baby = currentBaby;
+    if (baby == null) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await growthRepo.insert(
+      GrowthRecord(
+        id: const Uuid().v4(),
+        babyId: baby.id,
+        measuredAt: measuredAt,
+        heightCm: heightCm,
+        weightKg: weightKg,
+        headCm: headCm,
+        note: note,
+        createdAt: now,
+        updatedAt: now,
+      ),
+    );
+    await refresh();
+  }
+
+  Future<void> updateGrowth({
+    required String id,
+    required int measuredAt,
+    double? heightCm,
+    double? weightKg,
+    double? headCm,
+    String? note,
+  }) async {
+    final existing = _growthById(id);
+    if (existing == null) return;
+    await growthRepo.update(
+      existing.copyWith(
+        measuredAt: measuredAt,
+        heightCm: heightCm,
+        weightKg: weightKg,
+        headCm: headCm,
+        note: note,
+      ),
+    );
+    await refresh();
+  }
+
+  Future<void> deleteGrowth(String id) async {
+    await growthRepo.delete(id);
+    await refresh();
+  }
+
+  // ---------- 儿保 ----------
+
+  Future<void> addCheckup({
+    required String title,
+    required int scheduledAt,
+    List<String> items = const [],
+    String? note,
+  }) async {
+    final baby = currentBaby;
+    if (baby == null) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await checkupRepo.insert(
+      CheckupPlan(
+        id: const Uuid().v4(),
+        babyId: baby.id,
+        title: title.trim(),
+        scheduledAt: scheduledAt,
+        items: [for (final label in items) CheckupItem(label: label)],
+        note: note,
+        createdAt: now,
+        updatedAt: now,
+      ),
+    );
+    await refresh();
+  }
+
+  /// 修改儿保内容与计划日期，已完成 / 已跳过状态保持不变。
+  Future<void> updateCheckup({
+    required String id,
+    String? title,
+    int? scheduledAt,
+    List<CheckupItem>? items,
+    String? note,
+  }) async {
+    final existing = _checkupById(id);
+    if (existing == null) return;
+    await checkupRepo.update(
+      existing.copyWith(
+        title: title,
+        scheduledAt: scheduledAt,
+        items: items,
+        note: note,
+      ),
+    );
+    await refresh();
+  }
+
+  Future<void> completeCheckup({
+    required String id,
+    List<CheckupItem>? items,
+    String? note,
+    String? imagePath,
+    int? completedAt,
+  }) async {
+    final existing = _checkupById(id);
+    if (existing == null) return;
+    final oldImagePath = existing.imagePath;
+    await checkupRepo.update(
+      existing.copyWith(
+        items: items,
+        note: note,
+        imagePath: imagePath,
+        status: CareTaskStatus.done,
+        completedAt: completedAt ?? DateTime.now().millisecondsSinceEpoch,
+      ),
+    );
+    if (oldImagePath != null && oldImagePath != imagePath) {
+      await _deleteImage(oldImagePath);
+    }
+    await refresh();
+  }
+
+  Future<void> skipCheckup(String id) async {
+    final existing = _checkupById(id);
+    if (existing == null) return;
+    await checkupRepo.update(
+      existing.copyWith(status: CareTaskStatus.skipped),
+    );
+    await refresh();
+  }
+
+  Future<void> deleteCheckup(String id) async {
+    final imagePath = _checkupById(id)?.imagePath;
+    await checkupRepo.delete(id);
+    if (imagePath != null) {
+      await _deleteImage(imagePath);
+    }
+    await refresh();
+  }
+
+  // ---------- 疫苗 ----------
+
+  Future<void> addVaccine({
+    required String name,
+    required int scheduledAt,
+    int dose = 1,
+    String? note,
+  }) async {
+    final baby = currentBaby;
+    if (baby == null) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await vaccineRepo.insert(
+      VaccineRecord(
+        id: const Uuid().v4(),
+        babyId: baby.id,
+        name: name.trim(),
+        dose: dose,
+        scheduledAt: scheduledAt,
+        note: note,
+        createdAt: now,
+        updatedAt: now,
+      ),
+    );
+    await refresh();
+  }
+
+  /// 修改疫苗名称、剂次与计划日期，接种 / 跳过状态保持不变。
+  Future<void> updateVaccine({
+    required String id,
+    String? name,
+    int? dose,
+    int? scheduledAt,
+    String? note,
+  }) async {
+    final existing = _vaccineById(id);
+    if (existing == null) return;
+    await vaccineRepo.update(
+      existing.copyWith(
+        name: name,
+        dose: dose,
+        scheduledAt: scheduledAt,
+        note: note,
+      ),
+    );
+    await refresh();
+  }
+
+  Future<void> markVaccineDone({
+    required String id,
+    int? administeredAt,
+    bool fever = false,
+    double? temperature,
+    String? note,
+  }) async {
+    final existing = _vaccineById(id);
+    if (existing == null) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await vaccineRepo.update(
+      VaccineRecord(
+        id: existing.id,
+        babyId: existing.babyId,
+        name: existing.name,
+        dose: existing.dose,
+        scheduledAt: existing.scheduledAt,
+        status: CareTaskStatus.done,
+        administeredAt: administeredAt ?? now,
+        fever: fever,
+        temperature: fever ? temperature : null,
+        note: note ?? existing.note,
+        createdAt: existing.createdAt,
+        updatedAt: now,
+      ),
+    );
+    await refresh();
+  }
+
+  Future<void> skipVaccine(String id) async {
+    final existing = _vaccineById(id);
+    if (existing == null) return;
+    await vaccineRepo.update(
+      existing.copyWith(status: CareTaskStatus.skipped),
+    );
+    await refresh();
+  }
+
+  Future<void> deleteVaccine(String id) async {
+    await vaccineRepo.delete(id);
+    await refresh();
+  }
+
+  // ---------- 默认计划 ----------
+
+  /// 按出生日期补齐默认儿保与疫苗计划，返回新增数量。
+  ///
+  /// 以「类型 + 名称 + 剂次」为唯一键，已存在的项（含改期、已完成、已跳过）
+  /// 一律不覆盖。
+  Future<int> generateDefaultCareSchedule() async {
+    final baby = currentBaby;
+    if (baby == null) return 0;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    var added = 0;
+
+    final checkupTitles = {for (final plan in checkups) plan.title};
+    for (final draft in generateCheckupDrafts(baby.birthDate)) {
+      if (!checkupTitles.add(draft.title)) continue;
+      await checkupRepo.insert(
+        CheckupPlan(
+          id: const Uuid().v4(),
+          babyId: baby.id,
+          title: draft.title,
+          scheduledAt: draft.scheduledAt,
+          items: draft.items,
+          createdAt: now,
+          updatedAt: now,
+        ),
+      );
+      added++;
+    }
+
+    final vaccineKeys = {
+      for (final record in vaccines) _vaccineKey(record.name, record.dose),
+    };
+    for (final draft in generateVaccineDrafts(baby.birthDate)) {
+      if (!vaccineKeys.add(_vaccineKey(draft.name, draft.dose))) continue;
+      await vaccineRepo.insert(
+        VaccineRecord(
+          id: const Uuid().v4(),
+          babyId: baby.id,
+          name: draft.name,
+          dose: draft.dose,
+          scheduledAt: draft.scheduledAt,
+          createdAt: now,
+          updatedAt: now,
+        ),
+      );
+      added++;
+    }
+
+    await refresh();
+    return added;
+  }
+
+  static String _vaccineKey(String name, int dose) => '$name|$dose';
+
+  GrowthRecord? _growthById(String id) {
+    for (final record in growthRecords) {
+      if (record.id == id) return record;
+    }
+    return null;
+  }
+
+  CheckupPlan? _checkupById(String id) {
+    for (final plan in checkups) {
+      if (plan.id == id) return plan;
+    }
+    return null;
+  }
+
+  VaccineRecord? _vaccineById(String id) {
+    for (final record in vaccines) {
+      if (record.id == id) return record;
+    }
+    return null;
+  }
+
+  /// 删除图片文件；失败不影响记录本身的删除。
+  Future<void> _deleteImage(String relativePath) async {
+    try {
+      await ImageStore.delete(relativePath);
+    } catch (_) {
+      // 图片文件不可用时忽略，避免阻断数据操作。
+    }
+  }
+
+  /// 清理没有被任何记录引用的图片。
+  Future<void> _pruneImages() async {
+    try {
+      final keep = <String>{
+        ...await recordRepo.stoolImagePaths(),
+        ...await checkupRepo.imagePaths(),
+      };
+      await ImageStore.pruneOrphans(keep);
+    } catch (_) {
+      // 图片清理失败不影响主流程。
+    }
   }
 
   // ---------- 统计 ----------
