@@ -4,6 +4,7 @@ import '../../core/theme/app_theme.dart';
 import '../../domain/daily_statistics.dart';
 import '../../domain/time_rules.dart';
 import '../../state/app_state.dart';
+import '../growth/growth_page.dart';
 
 class StatisticsPage extends StatefulWidget {
   const StatisticsPage({super.key, required this.state});
@@ -62,6 +63,8 @@ class _StatisticsPageState extends State<StatisticsPage> {
                 '按北京时间统计 · ${state.currentBaby?.nickname ?? ''}',
                 style: const TextStyle(fontSize: 12, color: AppColors.subtle),
               ),
+              const SizedBox(height: 12),
+              _growthEntryCard(context),
               const SizedBox(height: 12),
               _dailySummaryCard(summary),
               const SizedBox(height: 16),
@@ -134,6 +137,79 @@ class _StatisticsPageState extends State<StatisticsPage> {
           icon: const Icon(Icons.chevron_right_rounded),
         ),
       ],
+    );
+  }
+
+  Widget _growthEntryCard(BuildContext context) {
+    final latest = state.growthRecords.isEmpty
+        ? null
+        : state.growthRecords.first;
+    var subtitle = '记录身高、体重、头围，查看生长趋势';
+    if (latest != null) {
+      final parts = <String>[
+        if (latest.heightCm != null)
+          '身高 ${latest.heightCm!.toStringAsFixed(1)}cm',
+        if (latest.weightKg != null)
+          '体重 ${latest.weightKg!.toStringAsFixed(1)}kg',
+        if (latest.headCm != null) '头围 ${latest.headCm!.toStringAsFixed(1)}cm',
+      ];
+      final (date, _, _) = splitStatDateTime(latest.measuredAt);
+      final dateText = '${date.month}月${date.day}日';
+      subtitle = parts.isEmpty ? dateText : '$dateText · ${parts.join(' · ')}';
+    }
+    return Card(
+      child: InkWell(
+        borderRadius: BorderRadius.circular(20),
+        onTap: () => Navigator.of(
+          context,
+        ).push(MaterialPageRoute(builder: (_) => GrowthPage(state: state))),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 12, 14),
+          child: Row(
+            children: [
+              Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  color: AppColors.greenSoft,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(
+                  Icons.show_chart_rounded,
+                  size: 20,
+                  color: AppColors.greenDark,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      '生长曲线',
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      subtitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: AppColors.subtle,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const Icon(Icons.chevron_right_rounded, color: AppColors.subtle),
+            ],
+          ),
+        ),
+      ),
     );
   }
 

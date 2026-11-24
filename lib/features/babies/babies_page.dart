@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 
 import '../../core/theme/app_theme.dart';
 import '../../domain/models.dart';
+import '../../platform/care_reminders.dart';
 import '../../state/app_state.dart';
 import '../../widgets/common.dart';
+import '../growth/growth_page.dart';
 import '../settings/settings_page.dart';
 import 'baby_form_page.dart';
 
@@ -169,10 +171,12 @@ class BabiesPage extends StatelessWidget {
                   color: AppColors.subtle,
                 ),
                 onSelected: (value) {
+                  if (value == 'growth') _openGrowth(context, baby);
                   if (value == 'edit') _editBaby(context, baby);
                   if (value == 'delete') _deleteBaby(context, baby);
                 },
                 itemBuilder: (_) => const [
+                  PopupMenuItem(value: 'growth', child: Text('生长记录')),
                   PopupMenuItem(value: 'edit', child: Text('编辑资料')),
                   PopupMenuItem(value: 'delete', child: Text('删除宝宝')),
                 ],
@@ -188,6 +192,16 @@ class BabiesPage extends StatelessWidget {
     Navigator.of(
       context,
     ).push(MaterialPageRoute(builder: (_) => BabyFormPage(state: state)));
+  }
+
+  Future<void> _openGrowth(BuildContext context, Baby baby) async {
+    if (state.currentBaby?.id != baby.id) {
+      await state.selectBaby(baby.id);
+    }
+    if (!context.mounted) return;
+    Navigator.of(
+      context,
+    ).push(MaterialPageRoute(builder: (_) => GrowthPage(state: state)));
   }
 
   void _editBaby(BuildContext context, Baby baby) {
@@ -211,13 +225,14 @@ class BabiesPage extends StatelessWidget {
     final confirmed = await showConfirmDialog(
       context,
       title: '删除「${baby.nickname}」？',
-      message: 'TA 的全部喝奶、睡眠和排便记录会一并删除，且无法恢复。',
+      message: 'TA 的全部喝奶、睡眠、排便、生长记录，以及儿保 / 疫苗待办会一并删除，且无法恢复。',
       confirmText: '删除',
       destructive: true,
     );
     if (!confirmed || !context.mounted) return;
     try {
       await state.deleteBaby(baby.id);
+      await syncCareReminders(state);
       if (!context.mounted) return;
       showSuccessSnack(context, '已删除「${baby.nickname}」');
     } catch (error) {

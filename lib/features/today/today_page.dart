@@ -5,12 +5,14 @@ import '../../domain/daily_statistics.dart';
 import '../../domain/feeding_reminder.dart';
 import '../../domain/models.dart';
 import '../../domain/time_rules.dart';
+import '../../platform/care_reminders.dart';
 import '../../state/app_state.dart';
 import '../../widgets/common.dart';
 import '../babies/baby_form_page.dart';
 import '../feeding/feeding_sheet.dart';
 import '../sleep/sleep_sheet.dart';
 import '../stool/stool_sheet.dart';
+import '../tasks/tasks_page.dart';
 
 class TodayPage extends StatelessWidget {
   const TodayPage({super.key, required this.state});
@@ -69,8 +71,13 @@ class TodayPage extends StatelessWidget {
           body: ListView(
             padding: const EdgeInsets.fromLTRB(20, 4, 20, 32),
             children: [
+              _CareReminderSync(
+                state: state,
+                babyId: state.currentBaby?.id,
+              ),
               _DateSwitcher(state: state),
               const SizedBox(height: 12),
+              _RecentTaskCard(state: state),
               _SummaryGrid(summary: state.summary),
               const SizedBox(height: 16),
               Row(
@@ -181,6 +188,166 @@ class TodayPage extends StatelessWidget {
               ),
             const SizedBox(height: 12),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 宝宝切换后重排儿保 / 疫苗提醒；不渲染任何内容。
+class _CareReminderSync extends StatefulWidget {
+  const _CareReminderSync({required this.state, required this.babyId});
+
+  final AppState state;
+  final String? babyId;
+
+  @override
+  State<_CareReminderSync> createState() => _CareReminderSyncState();
+}
+
+class _CareReminderSyncState extends State<_CareReminderSync> {
+  @override
+  void didUpdateWidget(covariant _CareReminderSync oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.babyId != widget.babyId) {
+      syncCareReminders(widget.state);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => const SizedBox.shrink();
+}
+
+/// 今日页顶部的「最近的待办」卡片，可关闭且关闭状态持久化。
+class _RecentTaskCard extends StatefulWidget {
+  const _RecentTaskCard({required this.state});
+
+  final AppState state;
+
+  @override
+  State<_RecentTaskCard> createState() => _RecentTaskCardState();
+}
+
+class _RecentTaskCardState extends State<_RecentTaskCard> {
+  static const String _hiddenKey = 'hidden_task_tip_id';
+
+  String? _hiddenId;
+  bool _loaded = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadHidden();
+  }
+
+  Future<void> _loadHidden() async {
+    String? hidden;
+    try {
+      hidden = await widget.state.settingsRepo.get(_hiddenKey);
+    } catch (_) {
+      hidden = null;
+    }
+    if (!mounted) return;
+    setState(() {
+      _hiddenId = hidden;
+      _loaded = true;
+    });
+  }
+
+  Future<void> _dismiss(String taskId) async {
+    setState(() => _hiddenId = taskId);
+    try {
+      await widget.state.settingsRepo.set(_hiddenKey, taskId);
+    } catch (_) {
+      // 持久化失败时本次仍保持关闭，下次进入会重新出现。
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final pending = [
+      for (final task in buildCareTaskItems(widget.state))
+        if (task.isPending) task,
+    ];
+    if (pending.isEmpty || !_loaded) return const SizedBox.shrink();
+    final task = pending.first;
+    if (_hiddenId == task.id) return const SizedBox.shrink();
+
+    final theme = Theme.of(context);
+    final nowMs = widget.state.nowMs;
+    final overdue = careTaskOverdue(task.scheduledAt, nowMs);
+    final today = careTaskToday(task.scheduledAt, nowMs);
+    final badgeColor = overdue
+        ? theme.colorScheme.error
+        : today
+        ? AppColors.greenDark
+        : AppColors.subtle;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Card(
+        child: InkWell(
+          borderRadius: BorderRadius.circular(20),
+          onTap: () => Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (_) => TasksPage(state: widget.state),
+            ),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 4, 12),
+            child: Row(
+              children: [
+                Container(
+                  width: 38,
+                  height: 38,
+                  decoration: BoxDecoration(
+                    color: task.color.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(task.icon, color: task.color, size: 20),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        task.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        '${task.isVaccine ? '疫苗' : '儿保'} · '
+                        '${careTaskDateText(task.scheduledAt)}',
+                        style: const TextStyle(
+                          fontSize: 11,
+                          color: AppColors.subtle,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  careTaskDueText(task.scheduledAt, nowMs),
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: badgeColor,
+                  ),
+                ),
+                IconButton(
+                  tooltip: '关闭提示',
+                  onPressed: () => _dismiss(task.id),
+                  icon: const Icon(Icons.close_rounded, size: 18),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -452,6 +619,8 @@ class _TimelineTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final (icon, color, title, subtitle) = _describe();
+    final imagePath = entry.stool?.imagePath;
+    const subtitleStyle = TextStyle(fontSize: 12, color: AppColors.subtle);
     return ListTile(
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
       leading: Container(
@@ -467,10 +636,22 @@ class _TimelineTile extends StatelessWidget {
         title,
         style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
       ),
-      subtitle: Text(
-        subtitle,
-        style: const TextStyle(fontSize: 12, color: AppColors.subtle),
-      ),
+      subtitle: imagePath == null || imagePath.isEmpty
+          ? Text(subtitle, style: subtitleStyle)
+          : Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Row(
+                children: [
+                  StoolImageThumbnail(
+                    relativePath: imagePath,
+                    size: 44,
+                    radius: 10,
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(child: Text(subtitle, style: subtitleStyle)),
+                ],
+              ),
+            ),
       trailing: Text(
         formatClock(entry.timeMs),
         style: const TextStyle(fontSize: 13, color: AppColors.subtle),

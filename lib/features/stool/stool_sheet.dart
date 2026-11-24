@@ -1,6 +1,10 @@
+﻿import 'dart:io';
+
 import 'package:flutter/material.dart';
 
+import '../../core/theme/app_theme.dart';
 import '../../domain/models.dart';
+import '../../platform/image_store.dart';
 import '../../state/app_state.dart';
 import '../../widgets/common.dart';
 
@@ -53,8 +57,11 @@ class _StoolSheetState extends State<StoolSheet> {
   late int _timeMs;
   StoolColor? _color;
   String? _consistency;
+  String? _imagePath;
+  String? _originalImagePath;
   final _noteController = TextEditingController();
   bool _saving = false;
+  bool _pickingImage = false;
 
   bool get isEdit => widget.stool != null;
 
@@ -65,6 +72,8 @@ class _StoolSheetState extends State<StoolSheet> {
     _timeMs = stool?.occurredAt ?? DateTime.now().millisecondsSinceEpoch;
     _color = stool?.color;
     _consistency = stool?.consistency;
+    _imagePath = stool?.imagePath;
+    _originalImagePath = stool?.imagePath;
     _noteController.text = stool?.note ?? '';
   }
 
@@ -72,6 +81,24 @@ class _StoolSheetState extends State<StoolSheet> {
   void dispose() {
     _noteController.dispose();
     super.dispose();
+  }
+
+  Future<void> _pickImage({required bool camera}) async {
+    if (_pickingImage || _saving) return;
+    setState(() => _pickingImage = true);
+    try {
+      final path = await ImageStore.pickAndSave(
+        folder: kStoolImageFolder,
+        camera: camera,
+      );
+      // 用户取消时不提示，也不改动已有图片。
+      if (path == null || !mounted) return;
+      setState(() => _imagePath = path);
+    } catch (error) {
+      if (mounted) showErrorSnack(context, error);
+    } finally {
+      if (mounted) setState(() => _pickingImage = false);
+    }
   }
 
   Future<void> _save() async {
@@ -91,6 +118,7 @@ class _StoolSheetState extends State<StoolSheet> {
           color: _color,
           consistency: _consistency,
           note: note,
+          imagePath: _imagePath,
         );
       } else {
         await widget.state.addStool(
@@ -98,8 +126,10 @@ class _StoolSheetState extends State<StoolSheet> {
           color: _color,
           consistency: _consistency,
           note: note,
+          imagePath: _imagePath,
         );
       }
+      await _deleteReplacedImage();
       if (!mounted) return;
       Navigator.of(context).pop();
       showSuccessSnack(context, isEdit ? '已保存修改' : '已记录排便');
@@ -108,6 +138,121 @@ class _StoolSheetState extends State<StoolSheet> {
     } finally {
       if (mounted) setState(() => _saving = false);
     }
+  }
+
+  /// 保存成功后删除被替换或移除的旧图片。
+  Future<void> _deleteReplacedImage() async {
+    final oldPath = _originalImagePath;
+    if (oldPath == null || oldPath.isEmpty || oldPath == _imagePath) return;
+    _originalImagePath = _imagePath;
+    try {
+      await ImageStore.delete(oldPath);
+    } catch (_) {
+      // 旧图片删除失败不影响已保存的记录。
+    }
+  }
+
+  Widget _buildPhotoSection(BuildContext context) {
+    final path = _imagePath;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('照片（可选）', style: Theme.of(context).textTheme.bodyMedium),
+        const SizedBox(height: 8),
+        if (path == null || path.isEmpty)
+          Row(
+            children: [
+              _photoPickerTile(
+                icon: Icons.photo_camera_rounded,
+                label: '拍照',
+                onTap: () => _pickImage(camera: true),
+              ),
+              const SizedBox(width: 10),
+              _photoPickerTile(
+                icon: Icons.photo_library_rounded,
+                label: '从相册选择',
+                onTap: () => _pickImage(camera: false),
+              ),
+            ],
+          )
+        else
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              StoolImageThumbnail(relativePath: path, size: 96),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const SizedBox(height: 4),
+                    const Text(
+                      '点击缩略图可查看大图',
+                      style: TextStyle(fontSize: 12, color: AppColors.subtle),
+                    ),
+                    Wrap(
+                      spacing: 4,
+                      children: [
+                        TextButton.icon(
+                          onPressed: _pickingImage
+                              ? null
+                              : () => _pickImage(camera: false),
+                          icon: const Icon(
+                            Icons.photo_library_rounded,
+                            size: 18,
+                          ),
+                          label: const Text('更换'),
+                        ),
+                        TextButton.icon(
+                          onPressed: _pickingImage
+                              ? null
+                              : () => setState(() => _imagePath = null),
+                          icon: const Icon(
+                            Icons.delete_outline_rounded,
+                            size: 18,
+                          ),
+                          label: const Text('移除'),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+      ],
+    );
+  }
+
+  Widget _photoPickerTile({
+    required IconData icon,
+    required String label,
+    required VoidCallback onTap,
+  }) {
+    final enabled = !_pickingImage && !_saving;
+    final color = Theme.of(context).colorScheme.primary;
+    final contentColor = enabled ? color : color.withValues(alpha: 0.4);
+    return InkWell(
+      borderRadius: BorderRadius.circular(12),
+      onTap: enabled ? onTap : null,
+      child: Container(
+        width: 96,
+        height: 96,
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.06),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: color.withValues(alpha: 0.25)),
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, size: 24, color: contentColor),
+            const SizedBox(height: 6),
+            Text(label, style: TextStyle(fontSize: 11, color: contentColor)),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -142,6 +287,8 @@ class _StoolSheetState extends State<StoolSheet> {
               valueMs: _timeMs,
               onChanged: (value) => setState(() => _timeMs = value),
             ),
+            const SizedBox(height: 18),
+            _buildPhotoSection(context),
             const SizedBox(height: 18),
             Text('颜色（可选）', style: Theme.of(context).textTheme.bodyMedium),
             const SizedBox(height: 8),
@@ -213,6 +360,165 @@ class _StoolSheetState extends State<StoolSheet> {
             ],
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// 以圆角缩略图展示应用私有目录中的图片，点击可全屏查看。
+class StoolImageThumbnail extends StatefulWidget {
+  const StoolImageThumbnail({
+    super.key,
+    required this.relativePath,
+    this.size = 96,
+    this.radius = 12,
+  });
+
+  /// 数据库保存的相对路径，例如 `stool/xxx.jpg`。
+  final String relativePath;
+  final double size;
+  final double radius;
+
+  @override
+  State<StoolImageThumbnail> createState() => _StoolImageThumbnailState();
+}
+
+class _StoolImageThumbnailState extends State<StoolImageThumbnail> {
+  late Future<File?> _file = ImageStore.file(widget.relativePath);
+
+  @override
+  void didUpdateWidget(covariant StoolImageThumbnail oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.relativePath != widget.relativePath) {
+      _file = ImageStore.file(widget.relativePath);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(widget.radius),
+      child: GestureDetector(
+        onTap: () => showStoolImagePreview(context, widget.relativePath),
+        child: Container(
+          width: widget.size,
+          height: widget.size,
+          color: AppColors.border,
+          child: FutureBuilder<File?>(
+            future: _file,
+            builder: (context, snapshot) {
+              if (snapshot.connectionState != ConnectionState.done) {
+                return const Center(
+                  child: SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                );
+              }
+              final file = snapshot.data;
+              if (file == null) return const _ThumbnailFallback();
+              return Image.file(
+                file,
+                width: widget.size,
+                height: widget.size,
+                fit: BoxFit.cover,
+                errorBuilder: (_, _, _) => const _ThumbnailFallback(),
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ThumbnailFallback extends StatelessWidget {
+  const _ThumbnailFallback();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Center(
+      child: Icon(
+        Icons.broken_image_outlined,
+        size: 20,
+        color: AppColors.subtle,
+      ),
+    );
+  }
+}
+
+/// 全屏查看图片相对路径对应的大图。
+Future<void> showStoolImagePreview(BuildContext context, String relativePath) {
+  return showDialog<void>(
+    context: context,
+    barrierColor: Colors.black87,
+    builder: (_) => _ImagePreviewDialog(relativePath: relativePath),
+  );
+}
+
+class _ImagePreviewDialog extends StatelessWidget {
+  const _ImagePreviewDialog({required this.relativePath});
+
+  final String relativePath;
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      insetPadding: const EdgeInsets.all(16),
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          InteractiveViewer(
+            maxScale: 4,
+            child: FutureBuilder<File?>(
+              future: ImageStore.file(relativePath),
+              builder: (context, snapshot) {
+                if (snapshot.connectionState != ConnectionState.done) {
+                  return const SizedBox(
+                    height: 120,
+                    child: Center(child: CircularProgressIndicator()),
+                  );
+                }
+                final file = snapshot.data;
+                if (file == null) {
+                  return const Padding(
+                    padding: EdgeInsets.all(24),
+                    child: Text(
+                      '图片不存在',
+                      style: TextStyle(color: Colors.white70),
+                    ),
+                  );
+                }
+                return Image.file(
+                  file,
+                  fit: BoxFit.contain,
+                  errorBuilder: (_, _, _) => const Padding(
+                    padding: EdgeInsets.all(24),
+                    child: Text(
+                      '图片无法打开',
+                      style: TextStyle(color: Colors.white70),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+          Positioned(
+            top: 0,
+            right: 0,
+            child: IconButton(
+              tooltip: '关闭',
+              onPressed: () => Navigator.of(context).pop(),
+              style: IconButton.styleFrom(
+                backgroundColor: Colors.black45,
+                foregroundColor: Colors.white,
+              ),
+              icon: const Icon(Icons.close_rounded),
+            ),
+          ),
+        ],
       ),
     );
   }

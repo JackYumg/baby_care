@@ -4,6 +4,7 @@ import '../../core/theme/app_theme.dart';
 import '../../data/backup_service.dart';
 import '../../domain/feeding_reminder.dart';
 import '../../domain/time_rules.dart';
+import '../../platform/care_reminders.dart';
 import '../../platform/document_storage.dart';
 import '../../platform/feed_notifications.dart';
 import '../../state/app_state.dart';
@@ -26,6 +27,38 @@ class SettingsPage extends StatefulWidget {
 class _SettingsPageState extends State<SettingsPage> {
   bool _busy = false;
   String _busyLabel = '';
+  bool _careRemindersEnabled = true;
+  bool _careRemindersTouched = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCareReminders();
+  }
+
+  Future<void> _loadCareReminders() async {
+    String? value;
+    try {
+      value = await widget.state.settingsRepo.get(kCareRemindersEnabledKey);
+    } catch (_) {
+      value = null;
+    }
+    if (!mounted || _careRemindersTouched) return;
+    setState(() => _careRemindersEnabled = value != '0');
+  }
+
+  Future<void> _setCareRemindersEnabled(bool value) async {
+    setState(() {
+      _careRemindersTouched = true;
+      _careRemindersEnabled = value;
+    });
+    await widget.state.settingsRepo.set(
+      kCareRemindersEnabledKey,
+      value ? '1' : '0',
+    );
+    if (value) await FeedNotifications.requestPermissions();
+    await syncCareReminders(widget.state);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -87,6 +120,14 @@ class _SettingsPageState extends State<SettingsPage> {
                   secondary: const Icon(Icons.notifications_active_outlined),
                   title: const Text('锁屏状态栏'),
                   subtitle: const Text('常驻通知展示上次喝奶时间与下次倒计时'),
+                ),
+                const Divider(height: 1),
+                SwitchListTile(
+                  value: _careRemindersEnabled,
+                  onChanged: _setCareRemindersEnabled,
+                  secondary: const Icon(Icons.event_available_rounded),
+                  title: const Text('儿保 / 疫苗提醒'),
+                  subtitle: const Text('计划当天 09:00 提醒儿保检查与疫苗接种'),
                 ),
                 const Divider(height: 1),
                 ListTile(
@@ -252,6 +293,7 @@ class _SettingsPageState extends State<SettingsPage> {
       if (!mounted) return;
       setState(() => _busyLabel = '正在恢复数据…');
       await widget.state.restoreBackup(payload);
+      await syncCareReminders(widget.state);
       if (!mounted) return;
       final hasTimer = widget.state.hasActiveTimer;
       await showDialog<void>(
