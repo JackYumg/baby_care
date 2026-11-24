@@ -2,4 +2,6 @@
 <resources>
     <!-- 启动页背景，与 Flutter 过渡页保持一致，避免启动时闪白 -->
     <color name="splash_background">#FBF7F0</color>
+    <!-- 自适应图标背景，取自应用图标的浅蓝底色 -->
+    <color name="ic_launcher_background">#C3DBF3</color>
 </resources>

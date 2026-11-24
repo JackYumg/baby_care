@@ -9,6 +9,7 @@ import '../../platform/document_storage.dart';
 import '../../platform/feed_notifications.dart';
 import '../../state/app_state.dart';
 import '../../widgets/common.dart';
+import '../legal/privacy_policy_page.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({
@@ -201,6 +202,16 @@ class _SettingsPageState extends State<SettingsPage> {
                 ],
               ),
             ),
+          ),
+          const SizedBox(height: 12),
+          OutlinedButton.icon(
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => const PrivacyPolicyPage(),
+              ),
+            ),
+            icon: const Icon(Icons.privacy_tip_outlined),
+            label: const Text('查看完整隐私政策'),
           ),
         ],
       ),
