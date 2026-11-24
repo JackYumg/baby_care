@@ -2,10 +2,14 @@ import 'dart:convert';
 
 import 'package:sqflite/sqflite.dart';
 
+import '../platform/image_store.dart';
+
 /// 备份文件格式标识与版本。
 const String kBackupFormat = 'yuying-backup';
-const int kBackupVersion = 1;
-const int kMaxBackupBytes = 20 * 1024 * 1024;
+const int kBackupVersion = 2;
+const int kMaxBackupBytes = 60 * 1024 * 1024;
+
+const Set<String> _careStatuses = {'pending', 'done', 'skipped'};
 
 class BackupException implements Exception {
   BackupException(this.message);
@@ -25,7 +29,11 @@ class BackupPayload {
     required this.stools,
     required this.sleeps,
     required this.activeSessions,
+    required this.growths,
+    required this.checkups,
+    required this.vaccines,
     required this.settings,
+    required this.attachments,
   });
 
   final int exportedAt;
@@ -35,13 +43,30 @@ class BackupPayload {
   final List<Map<String, Object?>> stools;
   final List<Map<String, Object?>> sleeps;
   final List<Map<String, Object?>> activeSessions;
+  final List<Map<String, Object?>> growths;
+  final List<Map<String, Object?>> checkups;
+  final List<Map<String, Object?>> vaccines;
   final List<Map<String, Object?>> settings;
+
+  /// 相对路径（如 `stool/xxx.jpg`）→ base64 图片内容。
+  final Map<String, String> attachments;
 }
 
 class BackupService {
-  BackupService(this.db);
+  BackupService(
+    this.db, {
+    Future<Map<String, String>> Function()? readAttachments,
+    Future<void> Function(Map<String, String>)? writeAttachments,
+    Future<void> Function(Set<String>)? pruneAttachments,
+  }) : _readAttachments = readAttachments ?? ImageStore.readAllAsBase64,
+       _writeAttachments = writeAttachments ?? ImageStore.restoreAllFromBase64,
+       _pruneAttachments = pruneAttachments ?? ImageStore.pruneOrphans;
 
   final Database db;
+
+  final Future<Map<String, String>> Function() _readAttachments;
+  final Future<void> Function(Map<String, String>) _writeAttachments;
+  final Future<void> Function(Set<String>) _pruneAttachments;
 
   static const _tables = [
     'babies',
@@ -50,10 +75,13 @@ class BackupService {
     'stool_records',
     'sleep_records',
     'active_feeding_sessions',
+    'growth_records',
+    'checkup_plans',
+    'vaccine_records',
     'app_settings',
   ];
 
-  Future<String> exportJson({int? nowMs}) async {
+  Future<String> exportJson({int? nowMs, int? maxBytes}) async {
     final snapshot = await db.transaction((txn) async {
       final data = <String, List<Map<String, Object?>>>{};
       for (final table in _tables) {
@@ -61,6 +89,7 @@ class BackupService {
       }
       return data;
     });
+    final attachments = await _readAttachments();
     final exportedAt = nowMs ?? DateTime.now().millisecondsSinceEpoch;
     final payload = <String, Object?>{
       'format': kBackupFormat,
@@ -73,14 +102,22 @@ class BackupService {
       'stool_records': snapshot['stool_records'],
       'sleep_records': snapshot['sleep_records'],
       'active_feeding_sessions': snapshot['active_feeding_sessions'],
+      'growth_records': snapshot['growth_records'],
+      'checkup_plans': snapshot['checkup_plans'],
+      'vaccine_records': snapshot['vaccine_records'],
       'app_settings': snapshot['app_settings'],
+      'attachments': attachments,
     };
-    return const JsonEncoder.withIndent('  ').convert(payload);
+    final json = const JsonEncoder.withIndent('  ').convert(payload);
+    if (utf8.encode(json).length > (maxBytes ?? kMaxBackupBytes)) {
+      throw BackupException('备份内容超过 60MB，请先清理部分图片后重试');
+    }
+    return json;
   }
 
   BackupPayload parseAndValidate(String source) {
     if (utf8.encode(source).length > kMaxBackupBytes) {
-      throw BackupException('备份文件超过 20MB 限制');
+      throw BackupException('备份文件超过 60MB 限制');
     }
     Object? decoded;
     try {
@@ -107,7 +144,20 @@ class BackupService {
       decoded['active_feeding_sessions'] ?? const <Object?>[],
       '进行中亲喂',
     );
+    final growths = _rows(
+      decoded['growth_records'] ?? const <Object?>[],
+      '生长记录',
+    );
+    final checkups = _rows(
+      decoded['checkup_plans'] ?? const <Object?>[],
+      '儿保计划',
+    );
+    final vaccines = _rows(
+      decoded['vaccine_records'] ?? const <Object?>[],
+      '疫苗记录',
+    );
     final settings = _rows(decoded['app_settings'] ?? const <Object?>[], '设置');
+    final attachments = _attachments(decoded['attachments']);
 
     final babyIds = <String>{};
     for (final baby in babies) {
@@ -160,6 +210,7 @@ class BackupService {
     for (final stool in stools) {
       _requireBaby(stool, babyIds);
       _requireInt(stool['occurred_at'], '排便时间');
+      _checkRelativePath(stool['image_path'], '排便图片路径');
     }
 
     final sleepByBaby = <String, List<List<int>>>{};
@@ -207,6 +258,10 @@ class BackupService {
       }
     }
 
+    _validateGrowths(growths, babyIds);
+    _validateCheckups(checkups, babyIds);
+    _validateVaccines(vaccines, babyIds);
+
     return BackupPayload(
       exportedAt: decoded['exported_at'] is int
           ? decoded['exported_at']! as int
@@ -217,7 +272,11 @@ class BackupService {
       stools: stools,
       sleeps: sleeps,
       activeSessions: active,
+      growths: growths,
+      checkups: checkups,
+      vaccines: vaccines,
       settings: settings,
+      attachments: attachments,
     );
   }
 
@@ -234,6 +293,9 @@ class BackupService {
           'stool_records' => payload.stools,
           'sleep_records' => payload.sleeps,
           'active_feeding_sessions' => payload.activeSessions,
+          'growth_records' => payload.growths,
+          'checkup_plans' => payload.checkups,
+          'vaccine_records' => payload.vaccines,
           _ => payload.settings,
         };
         for (final row in rows) {
@@ -241,6 +303,140 @@ class BackupService {
         }
       }
     });
+    await _writeAttachments(payload.attachments);
+    await _pruneAttachments(await _referencedImagePaths());
+  }
+
+  Future<Set<String>> _referencedImagePaths() async {
+    final paths = <String>{};
+    for (final table in ['stool_records', 'checkup_plans']) {
+      final rows = await db.query(
+        table,
+        columns: ['image_path'],
+        where: "image_path IS NOT NULL AND image_path != ''",
+      );
+      for (final row in rows) {
+        final path = row['image_path'];
+        if (path is String) {
+          paths.add(path.replaceAll('\\', '/'));
+        }
+      }
+    }
+    return paths;
+  }
+
+  static Map<String, String> _attachments(Object? raw) {
+    if (raw == null) return const {};
+    if (raw is! Map) throw BackupException('备份附件格式错误');
+    final result = <String, String>{};
+    var totalBytes = 0;
+    for (final entry in raw.entries) {
+      final key = entry.key;
+      final value = entry.value;
+      if (key is! String || key.trim().isEmpty) {
+        throw BackupException('备份附件路径无效');
+      }
+      _checkRelativePath(key, '备份附件路径');
+      if (value is! String) throw BackupException('备份附件内容格式错误');
+      final List<int> bytes;
+      try {
+        bytes = base64Decode(value);
+      } on FormatException {
+        throw BackupException('备份附件不是有效的 base64 内容');
+      }
+      totalBytes += bytes.length;
+      if (totalBytes > kMaxBackupBytes) {
+        throw BackupException('备份内图片超过 60MB 限制');
+      }
+      result[key] = value;
+    }
+    return result;
+  }
+
+  static void _validateGrowths(
+    List<Map<String, Object?>> growths,
+    Set<String> babyIds,
+  ) {
+    final ids = <String>{};
+    for (final growth in growths) {
+      final id = growth['id'];
+      if (id is! String || !ids.add(id)) {
+        throw BackupException('生长记录 ID 无效或重复');
+      }
+      _requireBaby(growth, babyIds);
+      _requireInt(growth['measured_at'], '生长记录测量时间');
+    }
+  }
+
+  static void _validateCheckups(
+    List<Map<String, Object?>> checkups,
+    Set<String> babyIds,
+  ) {
+    final ids = <String>{};
+    for (final checkup in checkups) {
+      final id = checkup['id'];
+      if (id is! String || !ids.add(id)) {
+        throw BackupException('儿保计划 ID 无效或重复');
+      }
+      _requireBaby(checkup, babyIds);
+      _requireInt(checkup['scheduled_at'], '儿保计划时间');
+      if (!_careStatuses.contains(checkup['status'])) {
+        throw BackupException('儿保计划状态无效');
+      }
+      final items = checkup['items'];
+      if (items != null) {
+        if (items is! String) throw BackupException('儿保检查项格式错误');
+        if (items.trim().isNotEmpty) {
+          Object? parsed;
+          try {
+            parsed = jsonDecode(items);
+          } on FormatException {
+            throw BackupException('儿保检查项格式错误');
+          }
+          if (parsed is! List) throw BackupException('儿保检查项格式错误');
+        }
+      }
+      _checkRelativePath(checkup['image_path'], '儿保图片路径');
+    }
+  }
+
+  static void _validateVaccines(
+    List<Map<String, Object?>> vaccines,
+    Set<String> babyIds,
+  ) {
+    final ids = <String>{};
+    for (final vaccine in vaccines) {
+      final id = vaccine['id'];
+      if (id is! String || !ids.add(id)) {
+        throw BackupException('疫苗记录 ID 无效或重复');
+      }
+      _requireBaby(vaccine, babyIds);
+      _requireInt(vaccine['scheduled_at'], '疫苗计划时间');
+      if (!_careStatuses.contains(vaccine['status'])) {
+        throw BackupException('疫苗记录状态无效');
+      }
+      final dose = vaccine['dose'];
+      if (dose is! int || dose <= 0) {
+        throw BackupException('疫苗剂次必须为正整数');
+      }
+      final fever = vaccine['fever'];
+      if (fever == null) {
+        vaccine['fever'] = 0;
+      } else if (fever is bool) {
+        vaccine['fever'] = fever ? 1 : 0;
+      } else if (fever is int && (fever == 0 || fever == 1)) {
+        vaccine['fever'] = fever;
+      } else {
+        throw BackupException('疫苗发烧标记无效');
+      }
+      final temperature = vaccine['temperature'];
+      if (temperature != null) {
+        if (temperature is! num || temperature < 30 || temperature > 45) {
+          throw BackupException('疫苗体温无效');
+        }
+        vaccine['temperature'] = temperature.toDouble();
+      }
+    }
   }
 
   static List<Map<String, Object?>> _rows(Object? value, String label) {
@@ -264,5 +460,14 @@ class BackupService {
   static int _requireInt(Object? value, String label) {
     if (value is! int) throw BackupException('$label 格式错误');
     return value;
+  }
+
+  static void _checkRelativePath(Object? value, String label) {
+    if (value == null) return;
+    if (value is! String) throw BackupException('$label格式错误');
+    final normalized = value.replaceAll('\\', '/');
+    if (normalized.startsWith('/') || normalized.split('/').contains('..')) {
+      throw BackupException('$label必须是相对路径');
+    }
   }
 }

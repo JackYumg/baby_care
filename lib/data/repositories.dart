@@ -467,6 +467,7 @@ class RecordRepository {
     StoolColor? color,
     String? consistency,
     String? note,
+    String? imagePath,
   }) async {
     final now = DateTime.now().millisecondsSinceEpoch;
     final id = _uuid.v4();
@@ -477,6 +478,7 @@ class RecordRepository {
       'color': color?.name,
       'consistency': consistency,
       'note': note,
+      'image_path': imagePath,
       'created_at': now,
       'updated_at': now,
     });
@@ -489,6 +491,7 @@ class RecordRepository {
     StoolColor? color,
     String? consistency,
     String? note,
+    String? imagePath,
   }) async {
     await db.update(
       'stool_records',
@@ -497,6 +500,7 @@ class RecordRepository {
         'color': color?.name,
         'consistency': consistency,
         'note': note,
+        'image_path': imagePath,
         'updated_at': DateTime.now().millisecondsSinceEpoch,
       },
       where: 'id = ?',
@@ -506,6 +510,29 @@ class RecordRepository {
 
   Future<void> deleteStool(String id) async {
     await db.delete('stool_records', where: 'id = ?', whereArgs: [id]);
+  }
+
+  Future<StoolRecord?> stoolById(String id) async {
+    final rows = await db.query(
+      'stool_records',
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+    if (rows.isEmpty) return null;
+    return StoolRecord.fromMap(rows.first);
+  }
+
+  /// 排便图片相对路径；[babyId] 为空时返回全部宝宝的图片路径。
+  Future<List<String>> stoolImagePaths({String? babyId}) async {
+    final rows = await db.query(
+      'stool_records',
+      columns: ['image_path'],
+      where: babyId == null
+          ? 'image_path IS NOT NULL'
+          : 'baby_id = ? AND image_path IS NOT NULL',
+      whereArgs: babyId == null ? null : [babyId],
+    );
+    return [for (final row in rows) row['image_path']! as String];
   }
 
   // ---------- 睡眠 ----------
@@ -652,5 +679,125 @@ class RecordRepository {
 
   Future<void> deleteSleep(String id) async {
     await db.delete('sleep_records', where: 'id = ?', whereArgs: [id]);
+  }
+}
+
+class GrowthRepository {
+  GrowthRepository(this.db);
+
+  final Database db;
+
+  Future<List<GrowthRecord>> listByBaby(String babyId) async {
+    final rows = await db.query(
+      'growth_records',
+      where: 'baby_id = ?',
+      whereArgs: [babyId],
+      orderBy: 'measured_at DESC',
+    );
+    return rows.map(GrowthRecord.fromMap).toList();
+  }
+
+  Future<void> insert(GrowthRecord record) async {
+    await db.insert('growth_records', record.toMap());
+  }
+
+  Future<void> update(GrowthRecord record) async {
+    await db.update(
+      'growth_records',
+      record.toMap(),
+      where: 'id = ?',
+      whereArgs: [record.id],
+    );
+  }
+
+  Future<void> delete(String id) async {
+    await db.delete('growth_records', where: 'id = ?', whereArgs: [id]);
+  }
+
+  Future<void> deleteByBaby(String babyId) async {
+    await db.delete(
+      'growth_records',
+      where: 'baby_id = ?',
+      whereArgs: [babyId],
+    );
+  }
+}
+
+class CheckupRepository {
+  CheckupRepository(this.db);
+
+  final Database db;
+
+  Future<List<CheckupPlan>> listByBaby(String babyId) async {
+    final rows = await db.query(
+      'checkup_plans',
+      where: 'baby_id = ?',
+      whereArgs: [babyId],
+      orderBy: 'scheduled_at ASC',
+    );
+    return rows.map(CheckupPlan.fromMap).toList();
+  }
+
+  Future<void> insert(CheckupPlan plan) async {
+    await db.insert('checkup_plans', plan.toMap());
+  }
+
+  Future<void> update(CheckupPlan plan) async {
+    await db.update(
+      'checkup_plans',
+      plan.toMap(),
+      where: 'id = ?',
+      whereArgs: [plan.id],
+    );
+  }
+
+  Future<void> delete(String id) async {
+    await db.delete('checkup_plans', where: 'id = ?', whereArgs: [id]);
+  }
+
+  /// 儿保检查图片相对路径；[babyId] 为空时返回全部宝宝的图片路径。
+  Future<List<String>> imagePaths({String? babyId}) async {
+    final rows = await db.query(
+      'checkup_plans',
+      columns: ['image_path'],
+      where: babyId == null
+          ? 'image_path IS NOT NULL'
+          : 'baby_id = ? AND image_path IS NOT NULL',
+      whereArgs: babyId == null ? null : [babyId],
+    );
+    return [for (final row in rows) row['image_path']! as String];
+  }
+}
+
+class VaccineRepository {
+  VaccineRepository(this.db);
+
+  final Database db;
+
+  Future<List<VaccineRecord>> listByBaby(String babyId) async {
+    final rows = await db.query(
+      'vaccine_records',
+      where: 'baby_id = ?',
+      whereArgs: [babyId],
+      orderBy: 'scheduled_at ASC',
+    );
+    return rows.map(VaccineRecord.fromMap).toList();
+  }
+
+  Future<void> insert(VaccineRecord record) async {
+    await db.insert('vaccine_records', record.toMap());
+  }
+
+  Future<void> update(VaccineRecord record) async {
+    await db.update(
+      'vaccine_records',
+      record.toMap(),
+      where: 'id = ?',
+      whereArgs: [record.id],
+    );
+  }
+
+  Future<void> delete(String id) async {
+    await db.delete('vaccine_records', where: 'id = ?', whereArgs: [id]);
   }
 }
