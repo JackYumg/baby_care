@@ -56,3 +56,5 @@ key.properties
 # AI IDE auto-generated specs/plans
 .trae/
 .gitignore
+docs/
+tool/
