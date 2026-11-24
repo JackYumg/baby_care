@@ -1,15 +1,20 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:timezone/data/latest.dart' as tz_data;
-import 'package:timezone/timezone.dart' as tz;
 
-/// 到点闹钟提醒（系统级定时通知，App 被杀后仍会触发）。
+import 'alarm_scheduler.dart';
+
+/// 到点提醒（系统级闹钟，App 被杀后仍会触发）。
+///
+/// 真正的调度与响铃交给 [AlarmScheduler]：Android 端用 AlarmManager 定时、
+/// 前台服务循环播放手机自带闹钟铃声，直到用户点击「停止响铃」。
+/// 本类只保留通知插件初始化与权限申请，并作为业务侧统一入口。
 class FeedNotifications {
+  static const String _feedingTag = 'feeding';
+  static const String _careTag = 'care';
+
   static final FlutterLocalNotificationsPlugin _plugin =
       FlutterLocalNotificationsPlugin();
-  static const String _channelId = 'feeding_reminder';
-  static const String _careChannelId = 'care_tasks';
-  static const String _carePayload = 'care_task';
+
   static bool _ready = false;
 
   static AndroidFlutterLocalNotificationsPlugin? get _android => _plugin
@@ -19,13 +24,17 @@ class FeedNotifications {
 
   static Future<void> init() async {
     if (_ready) return;
-    tz_data.initializeTimeZones();
-    tz.setLocalLocation(tz.getLocation('Asia/Shanghai'));
     await _plugin.initialize(
       settings: const InitializationSettings(
         android: AndroidInitializationSettings('ic_stat_feed'),
       ),
     );
+    try {
+      // 清理旧版本经本地通知调度的提醒，统一改由系统闹钟处理，避免重复响铃。
+      await _plugin.cancelAll();
+    } on Object catch (error) {
+      debugPrint('清理旧提醒失败: $error');
+    }
     _ready = true;
   }
 
@@ -49,6 +58,7 @@ class FeedNotifications {
     await requestPermissions();
   }
 
+  /// 调度一条喂奶提醒闹钟。
   static Future<void> schedule({
     required int id,
     required int atMs,
@@ -56,46 +66,16 @@ class FeedNotifications {
   }) async {
     await init();
     if (atMs <= DateTime.now().millisecondsSinceEpoch) return;
-    final when = tz.TZDateTime.fromMillisecondsSinceEpoch(tz.local, atMs);
-    const details = NotificationDetails(
-      android: AndroidNotificationDetails(
-        _channelId,
-        '喂奶提醒',
-        channelDescription: '到达预估的下次喂奶时间时提醒',
-        importance: Importance.max,
-        priority: Priority.high,
-        category: AndroidNotificationCategory.alarm,
-        visibility: NotificationVisibility.public,
-        playSound: true,
-        enableVibration: true,
-      ),
+    await AlarmScheduler.schedule(
+      id: id,
+      atMs: atMs,
+      title: '该喂奶了',
+      body: body,
+      tag: _feedingTag,
     );
-    try {
-      await _plugin.zonedSchedule(
-        id: id,
-        title: '该喂奶了',
-        body: body,
-        scheduledDate: when,
-        notificationDetails: details,
-        androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
-        payload: 'feeding',
-      );
-    } on Exception catch (error) {
-      // 没有精确闹钟权限时退化为非精确调度，仍能提醒。
-      debugPrint('精确闹钟调度失败，改为非精确调度: $error');
-      await _plugin.zonedSchedule(
-        id: id,
-        title: '该喂奶了',
-        body: body,
-        scheduledDate: when,
-        notificationDetails: details,
-        androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
-        payload: 'feeding',
-      );
-    }
   }
 
-  /// 调度一条儿保 / 疫苗接种提醒。
+  /// 调度一条儿保 / 疫苗接种提醒闹钟。
   ///
   /// 返回是否真正写入系统调度（时间已过或平台失败时返回 false）。
   static Future<bool> scheduleCare({
@@ -106,68 +86,24 @@ class FeedNotifications {
   }) async {
     await init();
     if (atMs <= DateTime.now().millisecondsSinceEpoch) return false;
-    final when = tz.TZDateTime.fromMillisecondsSinceEpoch(tz.local, atMs);
-    const details = NotificationDetails(
-      android: AndroidNotificationDetails(
-        _careChannelId,
-        '儿保与疫苗',
-        channelDescription: '儿保检查与疫苗接种计划当天的提醒',
-        importance: Importance.high,
-        priority: Priority.high,
-        category: AndroidNotificationCategory.reminder,
-        visibility: NotificationVisibility.public,
-        playSound: true,
-        enableVibration: true,
-      ),
+    return AlarmScheduler.schedule(
+      id: id,
+      atMs: atMs,
+      title: title,
+      body: body,
+      tag: _careTag,
     );
-    try {
-      await _plugin.zonedSchedule(
-        id: id,
-        title: title,
-        body: body,
-        scheduledDate: when,
-        notificationDetails: details,
-        androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
-        payload: _carePayload,
-      );
-    } on Exception catch (error) {
-      debugPrint('儿保提醒精确调度失败，改为非精确调度: $error');
-      try {
-        await _plugin.zonedSchedule(
-          id: id,
-          title: title,
-          body: body,
-          scheduledDate: when,
-          notificationDetails: details,
-          androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
-          payload: _carePayload,
-        );
-      } on Exception catch (fallbackError) {
-        debugPrint('儿保提醒调度失败: $fallbackError');
-        return false;
-      }
-    }
-    return true;
   }
 
   /// 按 id 取消一条儿保 / 疫苗提醒。
   static Future<void> cancelCare(int id) async {
     await init();
-    await _plugin.cancel(id: id);
+    await AlarmScheduler.cancel(id);
   }
 
-  /// 取消所有喂奶相关通知，但保留已调度的儿保 / 疫苗提醒。
+  /// 取消所有喂奶相关闹钟，但保留已调度的儿保 / 疫苗提醒。
   static Future<void> cancelAll() async {
     await init();
-    try {
-      final pending = await _plugin.pendingNotificationRequests();
-      for (final request in pending) {
-        if (request.payload == _carePayload) continue;
-        await _plugin.cancel(id: request.id);
-      }
-    } on Object catch (error) {
-      debugPrint('按条取消通知失败，改用全部取消: $error');
-      await _plugin.cancelAll();
-    }
+    await AlarmScheduler.cancelTagged(_feedingTag);
   }
 }

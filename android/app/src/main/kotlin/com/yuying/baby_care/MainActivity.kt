@@ -2,6 +2,7 @@ package com.yuying.baby_care
 
 import android.app.Activity
 import android.content.Intent
+import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Build
 import io.flutter.embedding.android.FlutterActivity
@@ -53,6 +54,52 @@ class MainActivity : FlutterActivity() {
                     }
                     "stop" -> {
                         stopService(Intent(this, FeedStatusService::class.java))
+                        result.success(null)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, RINGTONE_CHANNEL)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "getDefaultAlarmUri" -> {
+                        val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+                        result.success(uri?.toString())
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, ALARM_CHANNEL)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "schedule" -> {
+                        val ok = AlarmScheduler.schedule(
+                            context = this,
+                            id = call.argument<Int>("id") ?: 0,
+                            atMs = call.argument<Number>("atMs")?.toLong() ?: 0L,
+                            title = call.argument<String>("title") ?: "提醒",
+                            body = call.argument<String>("body") ?: "",
+                            tag = call.argument<String>("tag") ?: ""
+                        )
+                        result.success(ok)
+                    }
+                    "cancel" -> {
+                        AlarmScheduler.cancel(this, call.argument<Int>("id") ?: 0)
+                        result.success(null)
+                    }
+                    "cancelTagged" -> {
+                        AlarmScheduler.cancelTagged(this, call.argument<String>("tag") ?: "")
+                        result.success(null)
+                    }
+                    "cancelAll" -> {
+                        AlarmScheduler.cancelAll(this)
+                        result.success(null)
+                    }
+                    "scheduledIds" -> {
+                        result.success(AlarmScheduler.load(this).map { it.id })
+                    }
+                    "stopRinging" -> {
+                        stopService(Intent(this, AlarmRingService::class.java))
                         result.success(null)
                     }
                     else -> result.notImplemented()
@@ -170,6 +217,8 @@ class MainActivity : FlutterActivity() {
     companion object {
         private const val CHANNEL = "yuying/documents"
         private const val FEED_STATUS_CHANNEL = "yuying/feed_status"
+        private const val RINGTONE_CHANNEL = "yuying/ringtone"
+        private const val ALARM_CHANNEL = "yuying/alarm"
         private const val REQUEST_PICK = 4102
         private const val MAX_BACKUP_BYTES = 20 * 1024 * 1024
     }
