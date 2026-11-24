@@ -43,6 +43,7 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+/android/.kotlin
 
 # Signing secrets (must never be committed)
 key.properties
@@ -51,3 +52,4 @@ key.properties
 
 # Local debug screenshots
 .screenshots/
+.gitignore

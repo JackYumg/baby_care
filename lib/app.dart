@@ -2,16 +2,17 @@ import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'core/theme/app_theme.dart';
+import 'data/app_database.dart';
 import 'features/babies/babies_page.dart';
 import 'features/babies/baby_form_page.dart';
+import 'features/splash/splash_page.dart';
 import 'features/statistics/statistics_page.dart';
 import 'features/today/today_page.dart';
+import 'platform/feed_notifications.dart';
 import 'state/app_state.dart';
 
 class YuyingApp extends StatelessWidget {
-  const YuyingApp({super.key, required this.state});
-
-  final AppState state;
+  const YuyingApp({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -28,7 +29,74 @@ class YuyingApp extends StatelessWidget {
         GlobalWidgetsLocalizations.delegate,
         GlobalCupertinoLocalizations.delegate,
       ],
-      home: AppRoot(state: state),
+      home: const SplashGate(),
+    );
+  }
+}
+
+/// 先展示启动过渡页，初始化完成后再淡入主界面。
+class SplashGate extends StatefulWidget {
+  const SplashGate({super.key});
+
+  @override
+  State<SplashGate> createState() => _SplashGateState();
+}
+
+class _SplashGateState extends State<SplashGate> {
+  static const Duration _minimumSplash = Duration(milliseconds: 950);
+
+  AppState? _state;
+  Object? _error;
+  bool _booting = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _boot();
+  }
+
+  Future<void> _boot() async {
+    if (_booting) return;
+    _booting = true;
+    final startedAt = DateTime.now();
+    try {
+      await FeedNotifications.init();
+      final db = await AppDatabase.open();
+      final state = AppState(db);
+      await state.init();
+      final elapsed = DateTime.now().difference(startedAt);
+      if (elapsed < _minimumSplash) {
+        await Future<void>.delayed(_minimumSplash - elapsed);
+      }
+      if (!mounted) return;
+      setState(() => _state = state);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _error = error);
+    } finally {
+      _booting = false;
+    }
+  }
+
+  void _retry() {
+    setState(() => _error = null);
+    _boot();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final state = _state;
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 420),
+      switchInCurve: Curves.easeOut,
+      switchOutCurve: Curves.easeIn,
+      child: state == null
+          ? SplashView(
+              key: const ValueKey('splash'),
+              error: _error,
+              onRetry: _retry,
+            )
+          : AppRoot(key: const ValueKey('app'), state: state),
     );
   }
 }
