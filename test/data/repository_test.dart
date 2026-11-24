@@ -152,7 +152,19 @@ void main() {
   });
 
   test('备份导出后校验并覆盖恢复', () async {
-    final backup = BackupService(db);
+    final files = <String, String>{};
+    final backup = BackupService(
+      db,
+      readAttachments: () async => Map<String, String>.of(files),
+      writeAttachments: (data) async {
+        files
+          ..clear()
+          ..addAll(data);
+      },
+      pruneAttachments: (keep) async {
+        files.removeWhere((path, _) => !keep.contains(path));
+      },
+    );
     await recordRepo.insertBottleFeeding(
       babyId: 'a',
       startedAt: 1000,
