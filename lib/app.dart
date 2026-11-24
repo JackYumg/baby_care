@@ -7,6 +7,7 @@ import 'core/theme/app_theme.dart';
 import 'data/app_database.dart';
 import 'features/babies/babies_page.dart';
 import 'features/babies/baby_form_page.dart';
+import 'features/legal/privacy_gate.dart';
 import 'features/splash/splash_page.dart';
 import 'features/statistics/statistics_page.dart';
 import 'features/tasks/tasks_page.dart';
@@ -129,8 +130,10 @@ class AppRoot extends StatelessWidget {
     return ListenableBuilder(
       listenable: state,
       builder: (context, _) {
-        if (state.babies.isEmpty) return OnboardingPage(state: state);
-        return HomeShell(state: state);
+        final content = state.babies.isEmpty
+            ? OnboardingPage(state: state)
+            : HomeShell(state: state);
+        return PrivacyGate(state: state, child: content);
       },
     );
   }
